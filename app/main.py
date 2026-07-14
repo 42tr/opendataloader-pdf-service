@@ -139,6 +139,22 @@ def _exception_message(exc: Exception) -> str:
     return message[-8000:]
 
 
+def _sanitize_unicode(value: Any) -> Any:
+    """Replace lone UTF-16 surrogates that cannot be encoded as UTF-8."""
+    if isinstance(value, str):
+        return re.sub(r"[\ud800-\udfff]", "\ufffd", value)
+    if isinstance(value, list):
+        return [_sanitize_unicode(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_unicode(item) for item in value)
+    if isinstance(value, dict):
+        return {
+            _sanitize_unicode(key): _sanitize_unicode(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _bbox(
     element: dict[str, Any], page_sizes: dict[int, tuple[float, float]] | None = None
 ) -> list[int]:
@@ -473,6 +489,7 @@ async def file_parse(
         "results": results,
         "output_dir": str(task_dir),
     }
+    payload = _sanitize_unicode(payload)
 
     response_json = task_dir / "output.json"
     response_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

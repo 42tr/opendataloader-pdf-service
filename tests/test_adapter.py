@@ -6,6 +6,7 @@ from app.main import (
     _exception_message,
     _load_images,
     _page_spec,
+    _sanitize_unicode,
     _table_html,
     _to_content_list,
 )
@@ -144,3 +145,16 @@ def test_called_process_error_includes_java_stderr():
 
     assert "java detail" in message
     assert "stdout detail" in message
+
+
+def test_invalid_unicode_surrogates_are_replaced_before_response_encoding():
+    payload = {
+        "message": "before\udbc0after",
+        "results": [{"md_content": "\ud800text", "content_list": "[]"}],
+    }
+
+    sanitized = _sanitize_unicode(payload)
+    encoded = json.dumps(sanitized, ensure_ascii=False).encode("utf-8")
+
+    assert "before�after" in encoded.decode("utf-8")
+    assert sanitized["results"][0]["md_content"] == "�text"
