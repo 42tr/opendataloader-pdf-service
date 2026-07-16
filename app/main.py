@@ -17,6 +17,7 @@ from typing import Any
 import opendataloader_pdf
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 
 
@@ -28,6 +29,39 @@ app = FastAPI(
     version="1.0.0",
     description="A /file_parse compatible API backed by opendataloader-pdf.",
 )
+
+
+def custom_openapi() -> dict[str, Any]:
+    """Generate OpenAPI schema and force file upload fields to use ``format: binary``."""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    for component in schema.get("components", {}).get("schemas", {}).values():
+        for prop in component.get("properties", {}).values():
+            if prop.get("type") == "array" and isinstance(prop.get("items"), dict):
+                items = prop["items"]
+                if items.get("contentMediaType") == "application/octet-stream":
+                    items.pop("contentMediaType", None)
+                    items["format"] = "binary"
+            elif (
+                prop.get("type") == "string"
+                and prop.get("contentMediaType") == "application/octet-stream"
+            ):
+                prop.pop("contentMediaType", None)
+                prop["format"] = "binary"
+
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 def _safe_filename(name: str | None, index: int) -> str:
