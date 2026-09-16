@@ -275,7 +275,7 @@ def _image_content_item(
     }
 
 
-def _list_text_items(
+def _list_content_items(
     element: dict[str, Any], page_sizes: dict[int, tuple[float, float]] | None = None
 ):
     items_key = "toc items" if element.get("type") == "toc" else "list items"
@@ -283,13 +283,10 @@ def _list_text_items(
         if not isinstance(item, dict):
             continue
         children = [child for child in item.get("kids", []) if isinstance(child, dict)]
-        # A list item's content describes its own text. Child lists must be
-        # emitted separately, with their own positions, after that text.
-        own_text = _element_text({
-            **item,
-            "kids": [child for child in children if child.get("type") not in {"list", "toc"}],
-        })
-        if own_text:
+        # The item text does not include its child blocks. Preserve all child
+        # block types (not just lists), including their individual positions.
+        own_text = item.get("content")
+        if isinstance(own_text, str) and own_text:
             yield {
                 "type": "text",
                 "text": own_text,
@@ -297,8 +294,24 @@ def _list_text_items(
                 "page_idx": _page_index(item),
             }
         for child in children:
-            if child.get("type") in {"list", "toc"}:
-                yield from _list_text_items(child, page_sizes)
+            # Some outputs also repeat the item's text as a child paragraph.
+            # Keep any descendants of that paragraph without repeating its text.
+            child_nodes = [child]
+            if (
+                isinstance(own_text, str) and own_text
+                and child.get("content") == own_text
+                and child.get("type", "paragraph") in {"paragraph", "text", "text chunk", "line"}
+            ):
+                child_nodes = child.get("kids", [])
+            for node in child_nodes:
+                if not isinstance(node, dict):
+                    continue
+                positioned = {
+                    "page number": item.get("page number", element.get("page number", 1)),
+                    "bounding box": item.get("bounding box", element.get("bounding box")),
+                    **node,
+                }
+                yield from _to_content_list({"kids": [positioned]}, page_sizes)
 
 
 def _to_content_list(
@@ -326,7 +339,9 @@ def _to_content_list(
         elif kind in {"header", "footer"}:
             result.append({"type": kind, "text": _element_text(element), **common})
         elif kind in {"list", "toc"}:
-            result.extend(_list_text_items(element, page_sizes))
+            result.extend(_list_content_items(element, page_sizes))
+            # Recursive block conversion already includes all child images.
+            continue
         else:
             text = _element_text(element)
             if text:

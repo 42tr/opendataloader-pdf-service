@@ -258,3 +258,65 @@ def test_deep_child_lists_preserve_pages_without_duplicating_text_or_images():
     ]
     assert [entry["page_idx"] for entry in texts] == [1, 1, 2]
     assert sum(entry.get("img_path") == "images/deep.png" for entry in content) == 1
+
+
+def test_list_items_preserve_nested_paragraph_table_and_heading():
+    document = {"kids": [{
+        "type": "list", "page number": 7,
+        "list items": [{
+            "type": "list item", "page number": 7,
+            "content": "1) 环境条件\n环境温度：+5 ℃ ～ +55 ℃；",
+            "bounding box": [100, 600, 500, 700],
+            "kids": [{
+                "type": "paragraph", "content": "相对湿度：≤93%（40 ℃）。",
+                "page number": 7, "bounding box": [110, 580, 400, 595],
+            }],
+        }, {
+            "type": "list item", "content": "2) 能源条件", "page number": 7,
+            "kids": [{
+                "type": "table", "page number": 7,
+                "bounding box": [80, 400, 520, 550],
+                "rows": [{"cells": [{"kids": [
+                    {"type": "paragraph", "content": "AC 380 V / 50 Hz"},
+                    {"type": "image", "source": "images/cell.png", "page number": 7},
+                ]}]}],
+            }, {
+                "type": "heading", "content": "2.2.2 非正常运行条件",
+                "page number": 7, "bounding box": [80, 350, 350, 380],
+            }],
+        }],
+    }]}
+
+    result = _to_content_list(document, {7: (600, 800)})
+    assert [entry["type"] for entry in result] == [
+        "text", "text", "text", "table", "image", "text"
+    ]
+    assert result[1]["text"] == "相对湿度：≤93%（40 ℃）。"
+    assert result[1]["bbox"] == [183, 256, 666, 275]
+    assert "AC 380 V / 50 Hz" in result[3]["table_body"]
+    assert result[3]["bbox"] == [133, 312, 866, 500]
+    assert result[-1]["text"] == "2.2.2 非正常运行条件"
+    assert all(entry["page_idx"] == 6 for entry in result)
+
+
+def test_list_item_without_content_keeps_child_blocks_separate():
+    table = {
+        "type": "table", "page number": 4,
+        "rows": [{"cells": [{"kids": [{"content": "燃油"}]}]}],
+    }
+    document = {"kids": [{"type": "list", "list items": [{
+        "type": "list item", "page number": 4,
+        "kids": [
+            {"type": "paragraph", "content": "能源条件"},
+            table,
+            {"type": "heading", "content": "非正常运行条件"},
+        ],
+    }]}]}
+
+    result = _to_content_list(document)
+
+    assert [entry["type"] for entry in result] == ["text", "table", "text"]
+    assert result[0]["text"] == "能源条件"
+    assert "燃油" in result[1]["table_body"]
+    assert result[2]["text"] == "非正常运行条件"
+    assert all(entry["page_idx"] == 3 for entry in result)
