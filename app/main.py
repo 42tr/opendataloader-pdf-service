@@ -230,7 +230,7 @@ def _element_text(element: dict[str, Any]) -> str:
     if isinstance(content, str):
         return content
     texts: list[str] = []
-    for key in ("kids", "list items"):
+    for key in ("kids", "list items", "toc items"):
         children = element.get(key, [])
         if isinstance(children, list):
             texts.extend(_element_text(child) for child in children if isinstance(child, dict))
@@ -275,6 +275,32 @@ def _image_content_item(
     }
 
 
+def _list_text_items(
+    element: dict[str, Any], page_sizes: dict[int, tuple[float, float]] | None = None
+):
+    items_key = "toc items" if element.get("type") == "toc" else "list items"
+    for item in element.get(items_key, []):
+        if not isinstance(item, dict):
+            continue
+        children = [child for child in item.get("kids", []) if isinstance(child, dict)]
+        # A list item's content describes its own text. Child lists must be
+        # emitted separately, with their own positions, after that text.
+        own_text = _element_text({
+            **item,
+            "kids": [child for child in children if child.get("type") not in {"list", "toc"}],
+        })
+        if own_text:
+            yield {
+                "type": "text",
+                "text": own_text,
+                "bbox": _bbox(item, page_sizes) or _bbox(element, page_sizes),
+                "page_idx": _page_index(item),
+            }
+        for child in children:
+            if child.get("type") in {"list", "toc"}:
+                yield from _list_text_items(child, page_sizes)
+
+
 def _to_content_list(
     document: dict[str, Any], page_sizes: dict[int, tuple[float, float]] | None = None
 ) -> list[dict[str, Any]]:
@@ -299,17 +325,8 @@ def _to_content_list(
             result.append(_image_content_item(element, index, page_sizes))
         elif kind in {"header", "footer"}:
             result.append({"type": kind, "text": _element_text(element), **common})
-        elif kind == "list":
-            for item in element.get("list items", []):
-                if isinstance(item, dict):
-                    result.append(
-                        {
-                            "type": "text",
-                            "text": _element_text(item),
-                            "bbox": _bbox(item, page_sizes) or common["bbox"],
-                            "page_idx": _page_index(item),
-                        }
-                    )
+        elif kind in {"list", "toc"}:
+            result.extend(_list_text_items(element, page_sizes))
         else:
             text = _element_text(element)
             if text:

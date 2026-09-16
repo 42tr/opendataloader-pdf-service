@@ -3,6 +3,7 @@ import subprocess
 
 from app.main import (
     _bbox,
+    _element_text,
     _exception_message,
     _load_images,
     _page_spec,
@@ -96,6 +97,45 @@ def test_table_is_rendered_as_html():
     )
 
 
+def test_recognized_toc_items_keep_text_order_and_individual_boxes():
+    document = {
+        "kids": [
+            {"type": "paragraph", "content": "1 安全警告 4", "page number": 2},
+            {
+                "type": "toc",
+                "page number": 2,
+                "bounding box": [10, 600, 500, 700],
+                "toc items": [
+                    {
+                        "type": "toc item",
+                        "content": "1.1 警告 4",
+                        "page number": 2,
+                        "bounding box": [10, 650, 500, 700],
+                        "kids": [{"content": "1.1 警告 4"}],
+                    },
+                    {
+                        "type": "toc item",
+                        "page number": 2,
+                        "bounding box": [10, 600, 500, 640],
+                        "kids": [{"content": "1.2 注意 4"}],
+                    },
+                ],
+            },
+            {"type": "paragraph", "content": "2 概述 4", "page number": 2},
+        ]
+    }
+
+    content = _to_content_list(document, {2: (600, 800)})
+
+    assert [item["text"] for item in content] == [
+        "1 安全警告 4", "1.1 警告 4", "1.2 注意 4", "2 概述 4"
+    ]
+    assert all(item["page_idx"] == 1 for item in content)
+    assert content[1]["bbox"] == [16, 125, 833, 187]
+    assert content[2]["bbox"] == [16, 200, 833, 250]
+    assert _element_text(document["kids"][1]) == "1.1 警告 4\n1.2 注意 4"
+
+
 def test_images_are_returned_as_data_uri_from_task_directory(tmp_path):
     image_dir = tmp_path / "images"
     image_dir.mkdir()
@@ -158,3 +198,63 @@ def test_invalid_unicode_surrogates_are_replaced_before_response_encoding():
 
     assert "before�after" in encoded.decode("utf-8")
     assert sanitized["results"][0]["md_content"] == "�text"
+
+
+def test_manual_nested_directory_keeps_children_between_parent_and_next_item():
+    # Structure and coordinates from task 7eecd4ca's raw parser JSON.
+    def item(text, box, kids=None):
+        return {
+            "type": "list item", "content": text, "page number": 2,
+            "bounding box": box, "kids": kids or [],
+        }
+
+    children = {
+        "type": "list", "page number": 2,
+        "bounding box": [90.35, 633.613, 505.158, 699.097],
+        "list items": [
+            item("1.1 警告......4", [90.35, 664.813, 505.158, 699.097]),
+            item("1.2 注意......4", [90.35, 633.613, 505.158, 667.897]),
+        ],
+    }
+    document = {"kids": [{
+        "type": "list", "page number": 2,
+        "bounding box": [90.1, 602.413, 501.208, 730.297],
+        "list items": [
+            item("1 安全警告......4", [90.1, 696.013, 501.208, 730.297], [children]),
+            item("2 概述......4", [90.1, 602.413, 501.208, 636.697]),
+        ],
+    }]}
+
+    content = _to_content_list(document, {2: (595, 842)})
+
+    assert [entry["text"] for entry in content] == [
+        "1 安全警告......4", "1.1 警告......4", "1.2 注意......4", "2 概述......4"
+    ]
+    assert all(entry["page_idx"] == 1 for entry in content)
+    assert content[1]["bbox"] == [151, 169, 849, 210]
+    assert content[2]["bbox"] == [151, 206, 849, 247]
+
+
+def test_deep_child_lists_preserve_pages_without_duplicating_text_or_images():
+    figure = {"type": "image", "source": "images/deep.png", "page number": 3}
+    leaf = {"type": "list", "list items": [{
+        "type": "list item", "content": "2.2.1 正常运行条件", "page number": 3,
+        "kids": [figure],
+    }]}
+    middle = {"type": "list", "list items": [{
+        "type": "list item", "page number": 2,
+        "kids": [{"type": "paragraph", "content": "2.2 工作条件"}, leaf],
+    }]}
+    document = {"kids": [{"type": "list", "list items": [{
+        "type": "list item", "content": "2 概述", "page number": 2,
+        "kids": [{"type": "paragraph", "content": "2 概述"}, middle],
+    }]}]}
+
+    content = _to_content_list(document)
+    texts = [entry for entry in content if entry["type"] == "text"]
+
+    assert [entry["text"] for entry in texts] == [
+        "2 概述", "2.2 工作条件", "2.2.1 正常运行条件"
+    ]
+    assert [entry["page_idx"] for entry in texts] == [1, 1, 2]
+    assert sum(entry.get("img_path") == "images/deep.png" for entry in content) == 1
