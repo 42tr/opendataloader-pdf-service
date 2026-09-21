@@ -46,9 +46,9 @@ curl -X POST 'http://localhost:8000/file_parse' \
   -F 'files=@./b.pdf'
 ```
 
-`start_page_id` 和 `end_page_id` 是从 0 开始且包含结束页。`backend=pipeline`
-使用 OpenDataLoader 本地 Java 解析器；`backend=docling-fast` 使用 Hybrid 后端，需另行启动
-`opendataloader-pdf-hybrid` 服务。
+`start_page_id` 和 `end_page_id` 是从 0 开始且包含结束页。服务会先使用 OpenDataLoader
+本地 Java pipeline 解析；如果结果中包含图片，会自动改用 `docling-fast` Hybrid 后端重跑，
+因此需要另行启动 `opendataloader-pdf-hybrid` 服务。
 
 当前实现面向 PDF。OpenDataLoader 不原生支持 Office 文件，也没有与 MinerU 完全等价的
 `formula_enable` / `table_enable` 开关；这些表单字段会被接受以保持调用兼容。

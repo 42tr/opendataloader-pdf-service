@@ -7,6 +7,7 @@ import json
 import math
 import mimetypes
 import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -84,23 +85,13 @@ def _page_spec(
     return str(start) if start == end else f"{start}-{end}"
 
 
-def _backend_name(backend: str) -> str:
-    value = backend.strip().lower()
-    if value in {"docling", "docling-fast", "hybrid"}:
-        return "docling-fast"
-    if value == "hancom-ai":
-        return "hancom-ai"
-    return "off"
-
-
 def _run_opendataloader(
     input_paths: list[Path],
     parser_dir: Path,
     *,
     pages: str | None,
-    backend: str,
+    hybrid: str = "off",
 ) -> None:
-    hybrid = _backend_name(backend)
     image_dir = (parser_dir / "images").resolve()
     image_dir.mkdir(parents=True, exist_ok=True)
     opendataloader_pdf.convert(
@@ -403,13 +394,37 @@ def _find_output(parser_dir: Path, stem: str, suffixes: tuple[str, ...]) -> Path
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _output_contains_images(parser_dir: Path, inputs: list[tuple[str, Path]]) -> bool:
+    """Return whether the pipeline output contains an image element or file."""
+    for _, pdf_path in inputs:
+        json_path = _find_output(parser_dir, pdf_path.stem, (".json",))
+        if json_path is None:
+            continue
+        try:
+            document = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if any(element.get("type") == "image" for element in _walk_elements(document)):
+            return True
+
+    image_dir = parser_dir / "images"
+    return image_dir.is_dir() and any(path.is_file() for path in image_dir.rglob("*"))
+
+
+def _clear_directory(directory: Path) -> None:
+    for path in directory.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+
+
 def _parse_batch(
     inputs: list[tuple[str, Path]],
     task_dir: Path,
     *,
     start_page_id: int,
     end_page_id: int | None,
-    backend: str,
     return_md: bool,
     return_content_list: bool,
     return_images: bool,
@@ -428,8 +443,15 @@ def _parse_batch(
             [path for _, path in inputs],
             parser_dir,
             pages=_page_spec(start_page_id, end_page_id, total_pages),
-            backend=backend,
         )
+        if _output_contains_images(parser_dir, inputs):
+            _clear_directory(parser_dir)
+            _run_opendataloader(
+                [path for _, path in inputs],
+                parser_dir,
+                pages=_page_spec(start_page_id, end_page_id, total_pages),
+                hybrid="docling-fast",
+            )
     except Exception as exc:
         message = _exception_message(exc)
         return [
@@ -510,7 +532,6 @@ async def file_parse(
     lang: str = Form("ch"),
     lang_list: str | None = Form(None),
     output_dir: str | None = Form(None),
-    backend: str = Form("pipeline"),
 ) -> dict[str, Any] | FileResponse:
     del parse_method, formula_enable, table_enable, return_middle_json
     del return_model_output, return_content_middle, lang, lang_list, output_dir
@@ -538,7 +559,6 @@ async def file_parse(
         task_dir,
         start_page_id=start_page_id,
         end_page_id=end_page_id,
-        backend=backend,
         return_md=return_md,
         return_content_list=return_content_list,
         return_images=return_images,
