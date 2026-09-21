@@ -5,10 +5,11 @@
 
 ## 启动
 
-需要 [uv](https://docs.astral.sh/uv/)、Java 11+ 和 `pdfinfo`（Poppler）：
+需要 [uv](https://docs.astral.sh/uv/)、Java 11+、`pdfinfo`（Poppler）以及 Hybrid 依赖：
 
 ```bash
 uv sync
+uv run opendataloader-pdf-hybrid --host 127.0.0.1 --port 5002 --force-ocr --ocr-lang ch_sim --enrich-picture-description &
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -18,11 +19,10 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 uv run pytest
 ```
 
-也可以使用 Docker：
+也可以使用 Docker Compose（会同时启动 API 和 Hybrid OCR 服务）：
 
 ```bash
-docker build -t opendataloader-pdf-api .
-docker run --rm -p 8000:8000 -v "$PWD/output:/app/output" opendataloader-pdf-api
+docker compose up --build
 ```
 
 Swagger 文档：<http://localhost:8000/docs>
@@ -47,8 +47,17 @@ curl -X POST 'http://localhost:8000/file_parse' \
 ```
 
 `start_page_id` 和 `end_page_id` 是从 0 开始且包含结束页。服务会先使用 OpenDataLoader
-本地 Java pipeline 解析；如果结果中包含图片，会自动改用 `docling-fast` Hybrid 后端重跑，
-因此需要另行启动 `opendataloader-pdf-hybrid` 服务。
+本地 Java pipeline 解析；如果结果中包含图片，会记录切换原因并改用 `docling-fast` Hybrid
+后端以 `full` 模式重跑。Hybrid 服务启用了中文 OCR 和图片描述；Hybrid 失败不会静默回退，
+日志会显示具体引擎、服务地址、耗时和错误。
+
+日志示例：
+
+```text
+task=abcd1234 event=parse_start engine=pipeline ...
+task=abcd1234 event=engine_switch from=pipeline to=docling-fast reason=images_detected
+task=abcd1234 event=parse_finished engine=docling-fast elapsed_s=...
+```
 
 当前实现面向 PDF。OpenDataLoader 不原生支持 Office 文件，也没有与 MinerU 完全等价的
 `formula_enable` / `table_enable` 开关；这些表单字段会被接受以保持调用兼容。

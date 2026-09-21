@@ -82,6 +82,30 @@ def test_content_list_matches_expected_wire_types():
     json.dumps(content, ensure_ascii=False)
 
 
+def test_picture_elements_are_returned_as_images_with_description():
+    document = {
+        "kids": [
+            {
+                "type": "picture",
+                "description": "一张柱状图",
+                "page number": 1,
+                "bounding box": [1, 2, 3, 4],
+            }
+        ]
+    }
+
+    content = _to_content_list(document)
+
+    assert content == [{
+        "type": "image",
+        "img_path": content[0]["img_path"],
+        "image_caption": ["一张柱状图"],
+        "image_footnote": [],
+        "bbox": [1, 2, 3, 4],
+        "page_idx": 0,
+    }]
+
+
 def test_table_is_rendered_as_html():
     table = {
         "rows": [

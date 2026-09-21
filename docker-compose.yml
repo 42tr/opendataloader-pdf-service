@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      HYBRID_URL: http://hybrid:5002
+      HYBRID_TIMEOUT_MS: "600000"
+    volumes:
+      - ./output:/app/output
+    depends_on:
+      hybrid:
+        condition: service_healthy
+
+  hybrid:
+    build: .
+    command:
+      - opendataloader-pdf-hybrid
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5002"
+      - --force-ocr
+      - --ocr-lang
+      - ch_sim
+      - --enrich-picture-description
+    expose:
+      - "5002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30

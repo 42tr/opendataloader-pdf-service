@@ -4,10 +4,11 @@ import base64
 import hashlib
 import html
 import json
+import logging
 import math
 import mimetypes
+import os
 import re
-import shutil
 import subprocess
 import time
 import uuid
@@ -24,6 +25,10 @@ from fastapi.responses import FileResponse
 
 OUTPUT_ROOT = Path("output")
 UPLOAD_CHUNK_SIZE = 1024 * 1024
+HYBRID_URL = os.environ.get("HYBRID_URL", "http://127.0.0.1:5002").rstrip("/")
+HYBRID_TIMEOUT_MS = str(int(os.environ.get("HYBRID_TIMEOUT_MS", "600000")))
+logger = logging.getLogger("uvicorn.error.parser")
+IMAGE_TYPES = {"image", "picture"}
 
 app = FastAPI(
     title="OpenDataLoader PDF Parser",
@@ -91,19 +96,46 @@ def _run_opendataloader(
     *,
     pages: str | None,
     hybrid: str = "off",
+    task_id: str,
 ) -> None:
     image_dir = (parser_dir / "images").resolve()
     image_dir.mkdir(parents=True, exist_ok=True)
-    opendataloader_pdf.convert(
-        input_path=[str(path) for path in input_paths],
-        output_dir=str(parser_dir),
-        format="json,markdown",
-        image_output="external",
-        image_dir=str(image_dir),
-        pages=pages,
-        hybrid=hybrid,
-        hybrid_fallback=hybrid != "off",
-        quiet=True,
+    engine = "pipeline" if hybrid == "off" else hybrid
+    logger.info(
+        "task=%s event=parse_start engine=%s files=%s pages=%s mode=%s fallback=false",
+        task_id, engine, [path.name for path in input_paths], pages or "all",
+        "local" if hybrid == "off" else "full",
+    )
+    if hybrid != "off":
+        logger.info(
+            "task=%s event=hybrid_request url=%s timeout_ms=%s",
+            task_id, HYBRID_URL, HYBRID_TIMEOUT_MS,
+        )
+    started = time.perf_counter()
+    try:
+        opendataloader_pdf.convert(
+            input_path=[str(path) for path in input_paths],
+            output_dir=str(parser_dir),
+            format="json,markdown",
+            image_output="external",
+            image_dir=str(image_dir),
+            pages=pages,
+            hybrid=hybrid,
+            hybrid_mode="full" if hybrid != "off" else None,
+            hybrid_url=HYBRID_URL if hybrid != "off" else None,
+            hybrid_timeout=HYBRID_TIMEOUT_MS if hybrid != "off" else None,
+            hybrid_fallback=False,
+            quiet=True,
+        )
+    except Exception as exc:
+        logger.error(
+            "task=%s event=parse_failed engine=%s elapsed_s=%.3f error=%s",
+            task_id, engine, time.perf_counter() - started, _exception_message(exc),
+        )
+        raise
+    logger.info(
+        "task=%s event=parse_finished engine=%s elapsed_s=%.3f",
+        task_id, engine, time.perf_counter() - started,
     )
 
 
@@ -259,7 +291,7 @@ def _image_content_item(
     return {
         "type": "image",
         "img_path": f"images/{_image_name(element, index)}",
-        "image_caption": [],
+        "image_caption": [element["description"]] if element.get("description") else [],
         "image_footnote": [],
         "bbox": _bbox(element, page_sizes),
         "page_idx": _page_index(element),
@@ -325,7 +357,7 @@ def _to_content_list(
                     **common,
                 }
             )
-        elif kind == "image":
+        elif kind in IMAGE_TYPES:
             result.append(_image_content_item(element, index, page_sizes))
         elif kind in {"header", "footer"}:
             result.append({"type": kind, "text": _element_text(element), **common})
@@ -341,7 +373,7 @@ def _to_content_list(
         # OpenDataLoader can nest figures inside list items, table cells, headers, etc.
         # MinerU's content_list is flat, so surface those images as standalone entries.
         for nested_index, nested in enumerate(_walk_elements(element)):
-            if nested is not element and nested.get("type") == "image":
+            if nested is not element and nested.get("type") in IMAGE_TYPES:
                 result.append(
                     _image_content_item(nested, index * 1000 + nested_index, page_sizes)
                 )
@@ -370,7 +402,7 @@ def _image_data_uri(path: Path) -> str:
 def _load_images(document: dict[str, Any], parser_dir: Path) -> dict[str, str]:
     images: dict[str, str] = {}
     for index, element in enumerate(_walk_elements(document)):
-        if element.get("type") != "image":
+        if element.get("type") not in IMAGE_TYPES:
             continue
         name = _image_name(element, index)
         embedded = element.get("data")
@@ -404,19 +436,11 @@ def _output_contains_images(parser_dir: Path, inputs: list[tuple[str, Path]]) ->
             document = json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if any(element.get("type") == "image" for element in _walk_elements(document)):
+        if any(element.get("type") in IMAGE_TYPES for element in _walk_elements(document)):
             return True
 
     image_dir = parser_dir / "images"
     return image_dir.is_dir() and any(path.is_file() for path in image_dir.rglob("*"))
-
-
-def _clear_directory(directory: Path) -> None:
-    for path in directory.iterdir():
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
 
 
 def _parse_batch(
@@ -431,6 +455,8 @@ def _parse_batch(
 ) -> list[dict[str, Any]]:
     parser_dir = task_dir / "parser"
     parser_dir.mkdir(parents=True, exist_ok=True)
+    task_id = task_dir.name
+    engine = "pipeline"
     results: list[dict[str, Any]] = []
     page_sizes_by_path: dict[Path, dict[int, tuple[float, float]]] = {}
     try:
@@ -443,17 +469,28 @@ def _parse_batch(
             [path for _, path in inputs],
             parser_dir,
             pages=_page_spec(start_page_id, end_page_id, total_pages),
+            task_id=task_id,
         )
         if _output_contains_images(parser_dir, inputs):
-            _clear_directory(parser_dir)
+            logger.info(
+                "task=%s event=engine_switch from=pipeline to=docling-fast reason=images_detected",
+                task_id,
+            )
+            # Keep pipeline artifacts for diagnosis; never mix them into Hybrid output.
+            parser_dir = task_dir / "hybrid"
+            engine = "docling-fast"
             _run_opendataloader(
                 [path for _, path in inputs],
                 parser_dir,
                 pages=_page_spec(start_page_id, end_page_id, total_pages),
                 hybrid="docling-fast",
+                task_id=task_id,
             )
+        else:
+            logger.info("task=%s event=engine_selected engine=pipeline reason=no_images", task_id)
     except Exception as exc:
         message = _exception_message(exc)
+        logger.error("task=%s event=batch_failed engine=%s error=%s", task_id, engine, message)
         return [
             {
                 "filename": original,
@@ -494,7 +531,15 @@ def _parse_batch(
                     "images": _load_images(document, parser_dir) if return_images else {},
                 }
             )
+            logger.info(
+                "task=%s event=file_success file=%s engine=%s",
+                task_id, original, engine,
+            )
         except Exception as exc:
+            logger.error(
+                "task=%s event=file_failed file=%s engine=%s error=%s",
+                task_id, original, engine, _exception_message(exc),
+            )
             results.append(
                 {
                     "filename": original,
@@ -564,6 +609,10 @@ async def file_parse(
         return_images=return_images,
     )
     successful = sum(item["status"] == "success" for item in results)
+    logger.info(
+        "task=%s event=task_finished successful=%s failed=%s elapsed_s=%.3f",
+        task_id, successful, len(results) - successful, time.perf_counter() - started,
+    )
     payload: dict[str, Any] = {
         "code": 200,
         "message": "File parsing completed",
