@@ -11,6 +11,8 @@ import os
 import re
 import subprocess
 import time
+import urllib.error
+import urllib.request
 import uuid
 import zipfile
 from pathlib import Path
@@ -80,6 +82,8 @@ def _page_spec(
     start_page_id: int, end_page_id: int | None, total_pages: int | None = None
 ) -> str | None:
     start = max(start_page_id, 0) + 1
+    if total_pages is not None and start > total_pages:
+        raise ValueError(f"Start page {start} exceeds PDF page count {total_pages}")
     if end_page_id is None:
         if start == 1:
             return None
@@ -87,6 +91,8 @@ def _page_spec(
             return str(start)
         return str(start) if start == total_pages else f"{start}-{total_pages}"
     end = max(end_page_id, start_page_id) + 1
+    if total_pages is not None and total_pages > 0:
+        end = min(end, total_pages)
     return str(start) if start == end else f"{start}-{end}"
 
 
@@ -113,6 +119,8 @@ def _run_opendataloader(
         )
     started = time.perf_counter()
     try:
+        if hybrid != "off":
+            _check_hybrid_health(task_id)
         opendataloader_pdf.convert(
             input_path=[str(path) for path in input_paths],
             output_dir=str(parser_dir),
@@ -125,7 +133,7 @@ def _run_opendataloader(
             hybrid_url=HYBRID_URL if hybrid != "off" else None,
             hybrid_timeout=HYBRID_TIMEOUT_MS if hybrid != "off" else None,
             hybrid_fallback=False,
-            quiet=True,
+            quiet=False,
         )
     except Exception as exc:
         logger.error(
@@ -137,6 +145,26 @@ def _run_opendataloader(
         "task=%s event=parse_finished engine=%s elapsed_s=%.3f",
         task_id, engine, time.perf_counter() - started,
     )
+
+
+def _check_hybrid_health(task_id: str) -> None:
+    health_url = f"{HYBRID_URL}/health"
+    try:
+        with urllib.request.urlopen(health_url, timeout=5) as response:
+            if response.status != 200:
+                raise RuntimeError(f"HTTP {response.status}")
+            if json.load(response).get("status") != "ok":
+                raise ValueError("Expected health response with status=ok")
+    except (OSError, ValueError, AttributeError, RuntimeError) as exc:
+        message = (
+            f"Hybrid backend health check failed at {health_url}: "
+            f"{type(exc).__name__}: {exc}. "
+            "If the API runs in Docker, set HYBRID_URL to the Hybrid service name "
+            "(for example http://hybrid:5002)."
+        )
+        logger.error("task=%s event=hybrid_unhealthy error=%s", task_id, message)
+        raise RuntimeError(message) from exc
+    logger.info("task=%s event=hybrid_healthy url=%s", task_id, health_url)
 
 
 def _pdf_page_count(path: Path) -> int:
@@ -464,13 +492,12 @@ def _parse_batch(
         for _, path in inputs:
             page_counts[path] = _pdf_page_count(path)
             page_sizes_by_path[path] = _pdf_page_sizes(path, page_counts[path])
-        total_pages = max(page_counts.values())
-        _run_opendataloader(
-            [path for _, path in inputs],
-            parser_dir,
-            pages=_page_spec(start_page_id, end_page_id, total_pages),
-            task_id=task_id,
-        )
+        page_groups: dict[str | None, list[Path]] = {}
+        for _, path in inputs:
+            pages = _page_spec(start_page_id, end_page_id, page_counts[path])
+            page_groups.setdefault(pages, []).append(path)
+        for pages, paths in page_groups.items():
+            _run_opendataloader(paths, parser_dir, pages=pages, task_id=task_id)
         if _output_contains_images(parser_dir, inputs):
             logger.info(
                 "task=%s event=engine_switch from=pipeline to=docling-fast reason=images_detected",
@@ -479,13 +506,11 @@ def _parse_batch(
             # Keep pipeline artifacts for diagnosis; never mix them into Hybrid output.
             parser_dir = task_dir / "hybrid"
             engine = "docling-fast"
-            _run_opendataloader(
-                [path for _, path in inputs],
-                parser_dir,
-                pages=_page_spec(start_page_id, end_page_id, total_pages),
-                hybrid="docling-fast",
-                task_id=task_id,
-            )
+            for pages, paths in page_groups.items():
+                _run_opendataloader(
+                    paths, parser_dir, pages=pages,
+                    hybrid="docling-fast", task_id=task_id,
+                )
         else:
             logger.info("task=%s event=engine_selected engine=pipeline reason=no_images", task_id)
     except Exception as exc:

@@ -50,6 +50,8 @@ def test_page_spec_converts_zero_based_inclusive_range():
     assert _page_spec(2, None, 10) == "3-10"
     assert _page_spec(0, 2) == "1-3"
     assert _page_spec(3, 3) == "4"
+    assert _page_spec(0, 99999, 1) == "1"
+    assert _page_spec(2, 99999, 10) == "3-10"
 
 
 def test_content_list_matches_expected_wire_types():
