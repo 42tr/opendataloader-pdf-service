@@ -19,7 +19,7 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 uv run pytest
 ```
 
-也可以使用 Docker Compose（会同时启动 API 和 Hybrid OCR 服务）：
+也可以使用 Docker Compose（API 和 Hybrid OCR 在同一个容器中运行）：
 
 ```bash
 docker compose up --build
@@ -63,11 +63,10 @@ Hybrid 调用前会检查 `/health`；不可达时记录 `hybrid_unhealthy` 并�
 成功时记录 `hybrid_healthy`。Java 解析器的原始日志也会输出，失败详情会附在任务错误中。
 结束页超过实际页数时，按每份 PDF 分别截断；起始页超出实际页数时返回错误。
 
-如果日志出现 `url=http://127.0.0.1:5002`，表示使用本机默认地址。API 和 Hybrid
-分别运行在容器中时，应使用 `HYBRID_URL=http://hybrid:5002`，并确保它们在同一
-Docker 网络中。仓库的 Compose 配置已设置此地址并等待 Hybrid 健康检查通过。
-单独启动 API 容器不会自动启动 Hybrid；可使用 `docker compose up -d --build` 启动两者，
-用 `docker compose logs -f app hybrid` 查看日志。
+Docker Compose 配置会在同一个容器中启动两个进程：Hybrid OCR 监听 `5002`，API 监听
+`8000`。入口脚本会等待 Hybrid `/health` 通过后再启动 API。可使用
+`docker compose up -d --build` 启动服务，用 `docker compose logs -f pdfservice` 查看日志。
+如果日志出现 `url=http://127.0.0.1:5002`，这是单容器内的正常地址。
 
 当前实现面向 PDF。OpenDataLoader 不原生支持 Office 文件，也没有与 MinerU 完全等价的
 `formula_enable` / `table_enable` 开关；这些表单字段会被接受以保持调用兼容。
