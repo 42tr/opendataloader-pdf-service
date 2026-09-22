@@ -15,12 +15,13 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 ARG PRELOAD_HYBRID_MODELS=1
 ENV HF_HOME="/opt/hybrid-models/huggingface" \
-    EASYOCR_MODULE_PATH="/opt/hybrid-models/easyocr"
-RUN mkdir -p "$HF_HOME" "$EASYOCR_MODULE_PATH" \
+    EASYOCR_MODULE_PATH="/opt/hybrid-models/easyocr" \
+    DOCLING_ARTIFACTS_PATH="/opt/hybrid-models/docling"
+RUN mkdir -p "$HF_HOME" "$EASYOCR_MODULE_PATH" "$DOCLING_ARTIFACTS_PATH" \
     && if [ "$PRELOAD_HYBRID_MODELS" = "1" ]; then \
          echo "Downloading Hybrid models into the image"; \
          python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="HuggingFaceTB/SmolVLM-256M-Instruct")'; \
-         python -c 'import easyocr; easyocr.Reader(["ch_sim"], gpu=False, model_storage_directory="/opt/hybrid-models/easyocr", download_enabled=True)'; \
+         docling-tools models download easyocr --easyocr-lang iso:zh-Hans --output-dir "$DOCLING_ARTIFACTS_PATH"; \
        else \
          echo "Skipping Hybrid model preload (PRELOAD_HYBRID_MODELS=$PRELOAD_HYBRID_MODELS)"; \
        fi

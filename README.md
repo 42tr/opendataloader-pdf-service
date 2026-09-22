@@ -25,8 +25,9 @@ uv run pytest
 docker compose up --build
 ```
 
-Docker 构建阶段会预下载 SmolVLM 和中文 EasyOCR 模型并打入镜像，运行时不需要访问
-Hugging Face。模型文件会让镜像变大，构建机器需要临时联网。若只想构建基础镜像，
+Docker 构建阶段会预下载 SmolVLM、EasyOCR 检测模型和中文 `zh_sim_g2` 识别模型并打入镜像，
+通过 `DOCLING_ARTIFACTS_PATH` 提供给 Docling，运行时不需要访问外网。模型文件会让镜像变大，
+构建机器需要临时联网。若只想构建基础镜像，
 可使用 `docker build --build-arg PRELOAD_HYBRID_MODELS=0 ...`，但运行时需要自行挂载模型缓存。
 
 Swagger 文档：<http://localhost:8000/docs>
