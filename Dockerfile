@@ -3,7 +3,8 @@ FROM python:3.11-slim-bookworm
 COPY --from=ghcr.io/astral-sh/uv:0.7.19 /uv /uvx /bin/
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openjdk-17-jre-headless poppler-utils \
+    && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless poppler-utils libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
