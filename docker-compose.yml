@@ -1,6 +1,9 @@
 services:
   pdfservice:
-    build: .
+    build:
+      context: .
+      args:
+        PRELOAD_HYBRID_MODELS: "1"
     ports:
       - "8000:8000"
     environment:
