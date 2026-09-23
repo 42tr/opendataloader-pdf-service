@@ -22,9 +22,8 @@ RUN --mount=type=cache,id=hybrid-models,target=/root/.cache,sharing=locked \
         /root/.cache/huggingface /root/.cache/docling \
     && if [ "$PRELOAD_HYBRID_MODELS" = "1" ]; then \
          echo "Downloading Hybrid models into the image"; \
-         HF_HOME=/root/.cache/huggingface python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="HuggingFaceTB/SmolVLM-256M-Instruct")'; \
          docling-tools models download easyocr --easyocr-lang iso:zh-Hans --output-dir /root/.cache/docling; \
-         cp -a /root/.cache/huggingface/. "$HF_HOME/"; \
+         docling-tools models download-hf-repo HuggingFaceTB/SmolVLM-256M-Instruct --output-dir /root/.cache/docling; \
          cp -a /root/.cache/docling/. "$DOCLING_ARTIFACTS_PATH/"; \
        else \
          echo "Skipping Hybrid model preload (PRELOAD_HYBRID_MODELS=$PRELOAD_HYBRID_MODELS)"; \
