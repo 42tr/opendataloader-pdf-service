@@ -32,8 +32,8 @@ RUN --mount=type=cache,id=hybrid-models,target=/root/.cache,sharing=locked \
 
 ENV HF_HUB_OFFLINE="1"
 
-# Exercise the real Hybrid pipeline without network or the download cache mount.
-# Keep this before app code so normal API changes reuse the verified model layer.
+# Initialize every model used by the Hybrid service without network or the download
+# cache mount. Keep this before app code so normal API changes reuse this layer.
 COPY scripts/verify_hybrid_models.py ./scripts/verify_hybrid_models.py
 RUN --network=none if [ "$PRELOAD_HYBRID_MODELS" = "1" ]; then \
       timeout 600 python -u scripts/verify_hybrid_models.py; \

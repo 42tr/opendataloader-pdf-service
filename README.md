@@ -32,9 +32,9 @@ EasyOCR 检测模型和中文 `zh_sim_g2` 识别模型并打入镜像，
 可使用 `docker build --build-arg PRELOAD_HYBRID_MODELS=0 ...`，但运行时需要自行挂载模型缓存。
 
 预加载完成后，构建会在禁用网络、没有下载缓存挂载的环境中，使用与 Hybrid 服务一致的
-中文 OCR 和图片描述配置加载全部模型，并转换一页测试扫描 PDF。缺失模型或转换失败会
-直接中止构建。构建日志中的 `event=models_loaded` 和 `event=model_check_passed` 分别表示
-模型初始化和测试转换通过；HTTP `/health` 通过本身不代表模型已加载。
+中文 OCR 和图片描述配置加载全部模型。缺失模型或模型初始化失败会直接中止构建；构建
+日志中的 `event=models_loaded` 和 `event=model_check_passed` 表示模型初始化通过。HTTP
+`/health` 通过本身不代表模型已加载。
 
 Swagger 文档：<http://localhost:8000/docs>
 

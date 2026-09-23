@@ -1,7 +1,9 @@
-# 每次推送 tag 时,用 Dockerfile 构建多架构镜像并推送到 ghcr.io 和阿里云 ACR。
+# 每次推送 tag 时，在原生 amd64 / arm64 runner 上分别构建镜像，
+# 再合并为多架构 manifest 推送到 ghcr.io 和阿里云 ACR。
 #
-# 与 diting 不同,本服务是 Python 应用,Dockerfile 含 RUN 步骤(uv sync 安装依赖),
-# 在 amd64 runner 上构建 arm64 镜像需要 QEMU 模拟,因此多了 setup-qemu-action。
+# Dockerfile 会执行 Python 依赖安装、模型预下载和 Docling 模型初始化，
+# 因此不能在单一 amd64 runner 上用 QEMU 模拟 arm64。原生 runner 可以避免
+# QEMU 的 CPU 模拟开销，也能保证安装的 Python/Torch wheel 与目标架构一致。
 #
 # 需要在仓库 Settings 配置 secrets:
 #   ALIYUN_REGISTRY_USERNAME / ALIYUN_REGISTRY_PASSWORD
@@ -15,9 +17,19 @@ permissions:
   contents: read
 
 jobs:
-  docker:
-    name: build & push docker image
-    runs-on: ubuntu-latest
+  build:
+    name: build ${{ matrix.arch }} image
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
@@ -29,10 +41,6 @@ jobs:
         run: |
           version="${GITHUB_REF#refs/tags/}"
           echo "version=${version#v}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - uses: docker/setup-buildx-action@v3
 
@@ -48,24 +56,71 @@ jobs:
           username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
 
-      - name: Build and push
+      - name: Build and push architecture image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
           # 阿里云 ACR 个人版不支持 OCI provenance 工件,必须关闭
           provenance: false
-          # 同时复用镜像层缓存和 GitHub Actions 缓存。模型下载使用
-          # Dockerfile 的 cache mount，首次构建后不会在每次 release 重新下载。
-          cache-from: |
-            type=registry,ref=ghcr.io/42tr/opendataloader-pdf-service:latest
-            type=gha,scope=opendataloader-pdf-service
-          cache-to: |
-            type=gha,mode=max,scope=opendataloader-pdf-service
-            type=inline
           tags: |
-            ghcr.io/42tr/opendataloader-pdf-service:${{ steps.meta.outputs.version }}
-            ghcr.io/42tr/opendataloader-pdf-service:latest
-            crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:${{ steps.meta.outputs.version }}
-            crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:latest
+            ghcr.io/42tr/opendataloader-pdf-service:${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+            crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:${{ steps.meta.outputs.version }}-${{ matrix.arch }}
+          # 架构相关的依赖、Torch wheel 和模型缓存必须分开保存。
+          cache-from: |
+            type=gha,scope=opendataloader-pdf-service-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/42tr/opendataloader-pdf-service:buildcache-${{ matrix.arch }}
+          cache-to: |
+            type=gha,mode=max,scope=opendataloader-pdf-service-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/42tr/opendataloader-pdf-service:buildcache-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true
+
+  manifest:
+    name: publish multi-architecture manifest
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Compute image tags
+        id: meta
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          echo "version=${version#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com
+          username: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+
+      - name: Create GHCR multi-architecture manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "ghcr.io/42tr/opendataloader-pdf-service:${VERSION}" \
+            --tag ghcr.io/42tr/opendataloader-pdf-service:latest \
+            "ghcr.io/42tr/opendataloader-pdf-service:${VERSION}-amd64" \
+            "ghcr.io/42tr/opendataloader-pdf-service:${VERSION}-arm64"
+
+      - name: Create ACR multi-architecture manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:${VERSION}" \
+            --tag crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:latest \
+            "crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:${VERSION}-amd64" \
+            "crpi-gz6f3ok0ezphywc8.cn-shanghai.personal.cr.aliyuncs.com/42tr/opendataloader-pdf-service:${VERSION}-arm64"
