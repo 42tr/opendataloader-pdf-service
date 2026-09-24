@@ -11,7 +11,7 @@ opendataloader-pdf-hybrid \
   --host "${HYBRID_HOST}" \
   --port "${HYBRID_PORT}" \
   --force-ocr \
-  --ocr-lang "${HYBRID_OCR_LANG:-ch_sim}" \
+  --ocr-lang "${HYBRID_OCR_LANG:-ch_sim,en}" \
   --enrich-picture-description &
 HYBRID_PID=$!
 

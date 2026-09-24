@@ -24,7 +24,7 @@ RUN --mount=type=cache,id=hybrid-models,target=/root/.cache,sharing=locked \
     && if [ "$PRELOAD_HYBRID_MODELS" = "1" ]; then \
          echo "Downloading Hybrid models into the image"; \
          docling-tools models download layout tableformer easyocr smolvlm \
-           --easyocr-lang ch_sim --output-dir /root/.cache/docling; \
+           --easyocr-lang ch_sim --easyocr-lang en --output-dir /root/.cache/docling; \
          cp -a /root/.cache/docling/. "$DOCLING_ARTIFACTS_PATH/"; \
        else \
          echo "Skipping Hybrid model preload (PRELOAD_HYBRID_MODELS=$PRELOAD_HYBRID_MODELS)"; \

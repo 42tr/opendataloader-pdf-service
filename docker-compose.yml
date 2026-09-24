@@ -10,7 +10,7 @@ services:
       HYBRID_URL: http://127.0.0.1:5002
       HYBRID_TIMEOUT_MS: "600000"
       HYBRID_STARTUP_TIMEOUT: "600"
-      HYBRID_OCR_LANG: ch_sim
+      HYBRID_OCR_LANG: ch_sim,en
     volumes:
       - ./output:/app/output
     healthcheck:

@@ -9,7 +9,7 @@
 
 ```bash
 uv sync
-uv run opendataloader-pdf-hybrid --host 127.0.0.1 --port 5002 --force-ocr --ocr-lang ch_sim --enrich-picture-description &
+uv run opendataloader-pdf-hybrid --host 127.0.0.1 --port 5002 --force-ocr --ocr-lang ch_sim,en --enrich-picture-description &
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -26,7 +26,7 @@ docker compose up --build
 ```
 
 Docker 构建阶段会预下载布局模型（layout）、表格模型（tableformer）、SmolVLM、
-EasyOCR 检测模型和中文 `zh_sim_g2` 识别模型并打入镜像，
+EasyOCR 检测模型以及中英文识别模型并打入镜像，
 通过 `DOCLING_ARTIFACTS_PATH` 提供给 Docling，运行时不需要访问外网。模型文件会让镜像变大，
 构建机器需要临时联网。若只想构建基础镜像，
 可使用 `docker build --build-arg PRELOAD_HYBRID_MODELS=0 ...`，但运行时需要自行挂载模型缓存。
